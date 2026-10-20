@@ -1,0 +1,802 @@
+@implements IAsyncDisposable
+@inject SessionService Session
+@inject DialogService Dialogs
+@inject BrowserInterop Browser
+@inject UserPrefs Prefs
+@inject WebSyncService Sync
+@inject NavigationManager Nav
+
+<div class="app @(_sidebarOpen ? "sidebar-open" : null)" tabindex="-1" @onkeydown="OnKeyDown">
+
+    @* ===== Header ===== *@
+    <header class="topbar">
+        <button type="button" class="icon-btn menu-btn" title="Folders" @onclick="() => _sidebarOpen = !_sidebarOpen">
+            <Icon Name="menu" />
+        </button>
+        <div class="brand">
+            <span class="brand-mark"><Icon Name="cloud" Size="18" /></span>
+            <span class="brand-name">CloudDrive</span>
+        </div>
+        <div class="search">
+            <Icon Name="search" Size="16" Class="search-icon" />
+            <input type="search" placeholder="Search in this folder" aria-label="Search in this folder"
+                   @bind="SearchText" @bind:event="oninput"
+                   @onfocus="() => _searchFocused = true" @onblur="() => _searchFocused = false"
+                   @onkeydown="OnSearchKeyDown" />
+        </div>
+        <div class="user">
+            <span class="avatar">@Initial</span>
+            <span class="user-name">@Session.UserName</span>
+            <button type="button" class="btn" @onclick="SignOutAsync"><Icon Name="log-out" Size="16" /><span>Sign out</span></button>
+        </div>
+    </header>
+
+    <div class="body">
+        @* ===== Sidebar: folder tree ===== *@
+        <aside class="sidebar">
+            <div class="sidebar-head">
+                <span>Folders</span>
+                <span class="sidebar-actions">
+                    <button type="button" class="icon-btn" title="New folder inside the selected one"
+                            disabled="@(!CanCommand)" @onclick="() => NewFolderAsync(_selectedNode)">
+                        <Icon Name="folder-plus" />
+                    </button>
+                    <button type="button" class="icon-btn" title="Delete the selected folder"
+                            disabled="@(!CanDeleteFolder)" @onclick="() => DeleteFolderAsync(_selectedNode)">
+                        <Icon Name="trash" />
+                    </button>
+                </span>
+            </div>
+            <ul class="tree">
+                @if (_root is not null)
+                {
+                    <FolderTreeNode Node="_root" SelectedId="_selectedNode?.Id" OnSelect="SelectFolderAsync" OnContext="OpenFolderMenu" />
+                }
+            </ul>
+        </aside>
+        <div class="scrim" @onclick="() => _sidebarOpen = false"></div>
+
+        @* ===== Main area ===== *@
+        <main class="main">
+            <div class="title-row">
+                <div class="title-block">
+                    <h1>@(_selectedNode?.Name ?? "My Drive")</h1>
+                    <div class="muted ellipsis">@PathText</div>
+                </div>
+                <div class="muted summary">@SummaryText</div>
+            </div>
+
+            <div class="toolbar">
+                <div class="toolbar-group">
+                    <button type="button" class="btn btn-primary" disabled="@(!CanCommand)" title="Upload files" @onclick="UploadClickAsync">
+                        <Icon Name="upload" Size="16" /><span>Upload</span>
+                    </button>
+                    <button type="button" class="btn" disabled="@(!CanFileCommand)" title="Save the selected file to your computer" @onclick="DownloadSelectedAsync">
+                        <Icon Name="download" Size="16" /><span>Download</span>
+                    </button>
+                    <button type="button" class="btn" disabled="@(!CanFileCommand)" title="Delete the selected file (Del)" @onclick="DeleteSelectedAsync">
+                        <Icon Name="trash" Size="16" /><span>Delete</span>
+                    </button>
+                    <button type="button" class="btn" disabled="@(!CanCommand)" title="Synchronize a local folder with this folder" @onclick="SyncAsync">
+                        <Icon Name="sync" Size="16" /><span>Sync folder</span>
+                    </button>
+                </div>
+
+                <div class="toolbar-group toolbar-right">
+                    <label class="select-wrap" title="Sort order">
+                        <Icon Name="sort" Size="16" />
+                        <select @bind="_sortValue" @bind:after="OnSortChangedAsync">
+                            <option value="NameAsc">Name A → Z</option>
+                            <option value="NameDesc">Name Z → A</option>
+                        </select>
+                    </label>
+                    <label class="select-wrap" title="Show only these file types">
+                        <Icon Name="filter" Size="16" />
+                        <select @bind="_filterValue" @bind:after="OnFilterChangedAsync">
+                            <option value="All">All files</option>
+                            <option value="TxtJpg">TXT + JPG</option>
+                            <option value="TxtOnly">TXT only</option>
+                            <option value="JpgOnly">JPG only</option>
+                        </select>
+                    </label>
+
+                    <div class="dropdown">
+                        <button type="button" class="btn" title="Choose which columns are visible" @onclick="() => _columnsOpen = !_columnsOpen">
+                            <Icon Name="columns" Size="16" /><span>Columns</span>
+                        </button>
+                        @if (_columnsOpen)
+                        {
+                            <div class="dropdown-backdrop" @onclick="() => _columnsOpen = false"></div>
+                            <div class="dropdown-panel">
+                                <div class="dropdown-note">Name is always visible</div>
+                                <label><input type="checkbox" @bind="Prefs.Columns.Size" @bind:after="SavePrefsAsync" /> Size</label>
+                                <label><input type="checkbox" @bind="Prefs.Columns.Created" @bind:after="SavePrefsAsync" /> Created</label>
+                                <label><input type="checkbox" @bind="Prefs.Columns.Modified" @bind:after="SavePrefsAsync" /> Modified</label>
+                                <label><input type="checkbox" @bind="Prefs.Columns.UploadedBy" @bind:after="SavePrefsAsync" /> Uploaded by</label>
+                                <label><input type="checkbox" @bind="Prefs.Columns.EditedBy" @bind:after="SavePrefsAsync" /> Edited by</label>
+                            </div>
+                        }
+                    </div>
+
+                    <button type="button" class="icon-btn" title="Refresh" disabled="@_busy" @onclick="RefreshAsync">
+                        <Icon Name="refresh" />
+                    </button>
+                </div>
+            </div>
+
+            @* Панель деталей/превʼю з’являється лише коли вибрано файл *@
+            <div class="content @(SelectedFile is not null ? "with-details" : null)">
+                <section class="card list-card">
+                    @if (_loadingFiles && _allFiles.Count == 0)
+                    {
+                        <div class="empty"><div class="spinner"></div></div>
+                    }
+                    else if (_view.Count == 0)
+                    {
+                        <div class="empty">
+                            <Icon Name="folder" Size="44" Class="empty-icon" />
+                            <div class="empty-title">@EmptyTitle</div>
+                            <div class="muted empty-hint">@EmptyHint</div>
+                        </div>
+                    }
+                    else
+                    {
+                        <FileTable Files="_view" SelectedId="_selectedFileId" Columns="Prefs.Columns"
+                                   SortColumn="_sortColumn" SortDescending="_sortDescending"
+                                   OnSort="SortByAsync" OnSelect="SelectFileAsync" OnOpen="DownloadFileAsync" OnContext="OpenFileMenu" />
+                    }
+                </section>
+
+                @if (SelectedFile is { } selected)
+                {
+                    <aside class="card details-card">
+                        <DetailsPanel File="selected" Preview="_preview" OnClose="ClearFileSelection" />
+                    </aside>
+                }
+            </div>
+        </main>
+    </div>
+
+    @* ===== Status bar ===== *@
+    <footer class="statusbar">
+        <span class="status-text ellipsis">@_status</span>
+        <div class="progress progress-sm @(_busy ? null : "invisible")"><div class="progress-bar"></div></div>
+    </footer>
+
+    @* ===== Drag & drop overlay (показується через body.dragging, див. cloud.js) ===== *@
+    <div class="drop-overlay">
+        <div class="drop-box">
+            <span class="drop-icon"><Icon Name="upload" Size="38" /></span>
+            <div class="drop-title">Drop files to upload</div>
+            <div class="muted">@(_selectedNode is null ? "" : "to " + _selectedNode.FullPath)</div>
+        </div>
+    </div>
+
+    <InputFile id="upload-input" class="visually-hidden" multiple OnChange="OnFilesChosenAsync" tabindex="-1" />
+</div>
+
+@* ===== Context menus ===== *@
+@if (_folderMenu is { } folderMenu && _menuFolder is { } menuFolder)
+{
+    <ContextMenu X="folderMenu.X" Y="folderMenu.Y" OnClose="CloseMenus">
+        <button type="button" class="menu-item" @onclick="() => MenuAsync(() => NewFolderAsync(menuFolder))">
+            <Icon Name="folder-plus" Size="16" /> New folder here
+        </button>
+        <button type="button" class="menu-item danger" disabled="@menuFolder.IsRoot" @onclick="() => MenuAsync(() => DeleteFolderAsync(menuFolder))">
+            <Icon Name="trash" Size="16" /> Delete folder
+        </button>
+    </ContextMenu>
+}
+
+@if (_fileMenu is { } fileMenu)
+{
+    <ContextMenu X="fileMenu.X" Y="fileMenu.Y" OnClose="CloseMenus">
+        <button type="button" class="menu-item" @onclick="() => MenuAsync(DownloadSelectedAsync)">
+            <Icon Name="download" Size="16" /> Download
+        </button>
+        <button type="button" class="menu-item danger" @onclick="() => MenuAsync(DeleteSelectedAsync)">
+            <Icon Name="trash" Size="16" /> Delete
+        </button>
+    </ContextMenu>
+}
+
+@code {
+    private const long MaxUploadBytes = 100L * 1024 * 1024; // збігається з лімітом сервера
+
+    [Parameter] public Guid? FolderId { get; set; }
+
+    private CloudDriveApiClient Api => Session.Api;
+
+    // ---- дерево папок
+    private FolderNode? _root;
+    private FolderNode? _selectedNode;
+    private FolderNode? _menuFolder;
+    private readonly Dictionary<Guid, FolderNode> _nodes = new();
+    private readonly HashSet<Guid> _expanded = new();
+
+    // ---- файли
+    private List<FileDto> _allFiles = new();
+    private List<FileDto> _view = new();
+    private Guid? _selectedFileId;
+    private string? _previewKey;
+    private PreviewState _preview = PreviewState.None;
+    private int _filesGeneration;
+    private int _previewGeneration;
+    private bool _loadingFiles;
+
+    // ---- стан інтерфейсу
+    private bool _busy;
+    private bool _sidebarOpen;
+    private bool _columnsOpen;
+    private bool _searchFocused;
+    private string _status = "Ready";
+    private string _searchText = "";
+    private string _sortValue = "NameAsc";
+    private string _filterValue = "All";
+    private FileColumn _sortColumn = FileColumn.Name;
+    private bool _sortDescending;
+    private MenuState? _folderMenu;
+    private MenuState? _fileMenu;
+    private DotNetObjectReference<DriveView>? _self;
+
+    private string SearchText
+    {
+        get => _searchText;
+        set { _searchText = value; RebuildView(); }
+    }
+
+    private FileDto? SelectedFile => _selectedFileId is Guid id ? _allFiles.FirstOrDefault(f => f.Id == id) : null;
+    private bool CanCommand => !_busy && _selectedNode is not null;
+    private bool CanFileCommand => !_busy && SelectedFile is not null;
+    private bool CanDeleteFolder => CanCommand && !_selectedNode!.IsRoot;
+    private string Initial => string.IsNullOrEmpty(Session.UserName) ? "?" : Session.UserName[..1].ToUpperInvariant();
+    private string PathText => _selectedNode is null ? "" : _selectedNode.IsRoot ? "Your personal storage" : _selectedNode.FullPath;
+
+    private SortOrder ServerSort => _sortColumn == FileColumn.Name && _sortDescending ? SortOrder.NameDesc : SortOrder.NameAsc;
+    private FileFilter ServerFilter => Enum.TryParse<FileFilter>(_filterValue, out var f) ? f : FileFilter.All;
+
+    private string SummaryText
+    {
+        get
+        {
+            if (_view.Count == 0) return "";
+            if (_searchText.Trim().Length > 0) return $"{_view.Count} of {_allFiles.Count} files";
+            return $"{_view.Count} file{(_view.Count == 1 ? "" : "s")} · {FormatHelper.Size(_view.Sum(f => f.Size))}";
+        }
+    }
+
+    private string EmptyTitle =>
+        _searchText.Trim().Length > 0 ? "No matches"
+        : ServerFilter != FileFilter.All ? "No files of this type"
+        : "This folder is empty";
+
+    private string EmptyHint =>
+        _searchText.Trim().Length > 0 ? $"Nothing in this folder matches “{_searchText.Trim()}”."
+        : ServerFilter != FileFilter.All ? "Change the filter to see everything in this folder."
+        : "Drop files anywhere in this window, or click Upload.";
+
+    // ================================================================== lifecycle
+
+    protected override async Task OnInitializedAsync()
+    {
+        await Prefs.LoadAsync();
+        try { await LoadFoldersAsync(); }
+        catch (Exception ex) { await HandleErrorAsync(ex, "Loading folders"); }
+    }
+
+    protected override async Task OnParametersSetAsync()
+    {
+        if (_root is null) return;
+        var target = FolderId is Guid id && _nodes.TryGetValue(id, out var found) ? found : _root;
+        if (_selectedNode?.Id != target.Id) await SelectNodeAsync(target);
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!firstRender) return;
+        _self = DotNetObjectReference.Create(this);
+        await Browser.RegisterDropZoneAsync(_self);
+    }
+
+    [JSInvokable]
+    public Task OnDirectoriesDropped(int count)
+    {
+        _status = "Folders can't be dropped – use “Sync folder” to transfer whole folders.";
+        return InvokeAsync(StateHasChanged);
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        try { await Browser.UnregisterDropZoneAsync(); }
+        catch (Exception) { /* сторінку вже закрито */ }
+        _self?.Dispose();
+    }
+
+    // ================================================================== busy / errors
+
+    private async Task RunAsync(string operation, Func<Task> action)
+    {
+        if (_busy) return;
+        _busy = true;
+        _status = operation + "...";
+        StateHasChanged();
+        try
+        {
+            await action();
+            if (_status == operation + "...") _status = "Ready";
+        }
+        catch (Exception ex) { await HandleErrorAsync(ex, operation); }
+        finally { _busy = false; }
+    }
+
+    private async Task HandleErrorAsync(Exception ex, string operation)
+    {
+        if (ex is ApiException { StatusCode: System.Net.HttpStatusCode.Unauthorized })
+        {
+            await Session.ExpireAsync();
+            return;
+        }
+
+        _status = operation + " failed";
+        var message = ex is HttpRequestException ? "Could not reach the server. Check your connection and try again." : ex.Message;
+        await Dialogs.AlertAsync(operation + " failed", message);
+    }
+
+    private async Task SignOutAsync() => await Session.LogoutAsync();
+
+    // ================================================================== folders (tree)
+
+    private async Task LoadFoldersAsync()
+    {
+        if (_root is not null) CollectExpanded(_root);
+
+        var folders = await Api.GetFoldersAsync();
+        var rootDto = folders.FirstOrDefault(f => f.ParentId is null)
+                      ?? throw new InvalidOperationException("Server returned no root folder.");
+
+        _nodes.Clear();
+        FolderNode Make(FolderDto dto, string parentPath)
+        {
+            var name = dto.ParentId is null ? "My Drive" : dto.Name;
+            var node = new FolderNode(dto.Id, dto.ParentId, name, parentPath.Length == 0 ? name : parentPath + " / " + name);
+            _nodes[node.Id] = node;
+            foreach (var child in folders.Where(f => f.ParentId == dto.Id).OrderBy(f => f.Name, StringComparer.OrdinalIgnoreCase))
+                node.Children.Add(Make(child, node.FullPath));
+            return node;
+        }
+
+        _root = Make(rootDto, "");
+        foreach (var node in _nodes.Values)
+            if (node.IsRoot || _expanded.Contains(node.Id)) node.IsExpanded = true;
+
+        // вибрана папка після оновлення дерева - це вже новий обʼєкт з тим самим Id
+        _selectedNode = _selectedNode is null ? null : _nodes.GetValueOrDefault(_selectedNode.Id);
+    }
+
+    private void CollectExpanded(FolderNode node)
+    {
+        if (node.IsExpanded) _expanded.Add(node.Id);
+        foreach (var child in node.Children) CollectExpanded(child);
+    }
+
+    private void ExpandAncestors(FolderNode node)
+    {
+        var cursor = node;
+        while (cursor.ParentId is Guid parentId && _nodes.TryGetValue(parentId, out var parent))
+        {
+            parent.IsExpanded = true;
+            cursor = parent;
+        }
+    }
+
+    /// <summary>Клік у дереві змінює адресу (?folder=...), а завантаження файлів виконує OnParametersSetAsync.</summary>
+    private Task SelectFolderAsync(FolderNode node)
+    {
+        _sidebarOpen = false;
+        Nav.NavigateTo(node.IsRoot
+            ? Nav.GetUriWithQueryParameter("folder", (Guid?)null)
+            : Nav.GetUriWithQueryParameter("folder", node.Id));
+        return Task.CompletedTask;
+    }
+
+    private async Task SelectNodeAsync(FolderNode node)
+    {
+        _selectedNode = node;
+        ExpandAncestors(node);
+        ClearFileSelection();
+        _searchText = "";
+        _allFiles = new List<FileDto>();
+        _view = new List<FileDto>();
+        await LoadFilesAsync();
+    }
+
+    private async Task NewFolderAsync(FolderNode? parent)
+    {
+        if (parent is null || _busy) return;
+        var name = await Dialogs.PromptFolderNameAsync(parent.FullPath);
+        if (name is null) return;
+
+        await RunAsync("Creating folder", async () =>
+        {
+            await Api.CreateFolderAsync(name, parent.Id);
+            _expanded.Add(parent.Id);
+            parent.IsExpanded = true;
+            await LoadFoldersAsync();
+            _status = $"Created folder “{name}”";
+        });
+    }
+
+    private async Task DeleteFolderAsync(FolderNode? node)
+    {
+        if (node is null || node.IsRoot || _busy) return;
+        var confirmed = await Dialogs.ConfirmAsync("Delete folder",
+            $"Permanently delete “{node.FullPath}” and ALL of its files and subfolders?\n\nThis cannot be undone.",
+            "Delete", danger: true);
+        if (!confirmed) return;
+
+        await RunAsync("Deleting folder", async () =>
+        {
+            await Api.DeleteFolderAsync(node.Id);
+            var parentId = node.ParentId;
+            await LoadFoldersAsync();
+            _status = $"Deleted folder “{node.Name}”";
+
+            // якщо видалили вибрану папку (або її предка) - переходимо до батьківської
+            if (_selectedNode is null)
+            {
+                _allFiles = new List<FileDto>();
+                _view = new List<FileDto>();
+                ClearFileSelection();
+                var parent = parentId is Guid pid && _nodes.TryGetValue(pid, out var p) ? p : _root!;
+                await SelectFolderAsync(parent);
+            }
+        });
+    }
+
+    private void OpenFolderMenu(NodeContext context)
+    {
+        _fileMenu = null;
+        _menuFolder = context.Node;
+        _folderMenu = new MenuState((int)context.X, (int)context.Y);
+    }
+
+    // ================================================================== file list
+
+    private async Task LoadFilesAsync()
+    {
+        if (_selectedNode is not { } folder) return;
+        var generation = ++_filesGeneration;
+        _loadingFiles = true;
+        try
+        {
+            var list = await Api.GetFilesAsync(folder.Id, ServerSort, ServerFilter);
+            if (generation != _filesGeneration) return; // користувач уже перейшов в іншу папку
+
+            _allFiles = list;
+            if (_selectedFileId is Guid id && list.All(f => f.Id != id)) ClearFileSelection();
+            RebuildView();
+
+            // файл могли замінити (нова версія): оновлюємо превʼю
+            if (SelectedFile is { } current && $"{current.Id}:{current.Version}" != _previewKey)
+                await LoadPreviewAsync(current);
+        }
+        catch (Exception ex) when (generation == _filesGeneration)
+        {
+            await HandleErrorAsync(ex, "Loading files");
+        }
+        finally
+        {
+            if (generation == _filesGeneration) _loadingFiles = false;
+        }
+    }
+
+    private void RebuildView()
+    {
+        IEnumerable<FileDto> query = _allFiles;
+        var text = _searchText.Trim();
+        if (text.Length > 0)
+            query = query.Where(f => f.Name.Contains(text, StringComparison.CurrentCultureIgnoreCase));
+
+        // Name сортує сервер; інші колонки сортуються локально.
+        if (_sortColumn != FileColumn.Name)
+        {
+            Func<FileDto, object> key = _sortColumn switch
+            {
+                FileColumn.Size => f => f.Size,
+                FileColumn.Created => f => f.CreatedAt,
+                FileColumn.Modified => f => f.ModifiedAt,
+                FileColumn.UploadedBy => f => f.UploadedBy,
+                FileColumn.EditedBy => f => f.LastEditedBy,
+                _ => f => f.Name
+            };
+            query = _sortDescending ? query.OrderByDescending(key) : query.OrderBy(key);
+        }
+
+        _view = query.ToList();
+    }
+
+    private async Task RefreshAsync() =>
+        await RunAsync("Refreshing", async () =>
+        {
+            await LoadFoldersAsync();
+            await LoadFilesAsync();
+        });
+
+    private async Task SortByAsync(FileColumn column)
+    {
+        if (_sortColumn == column) _sortDescending = !_sortDescending;
+        else { _sortColumn = column; _sortDescending = false; }
+
+        if (column == FileColumn.Name)
+        {
+            _sortValue = _sortDescending ? "NameDesc" : "NameAsc";
+            await LoadFilesAsync(); // сортування за назвою виконує сервер
+        }
+        else RebuildView();
+    }
+
+    private async Task OnSortChangedAsync()
+    {
+        _sortColumn = FileColumn.Name;
+        _sortDescending = _sortValue == "NameDesc";
+        await LoadFilesAsync();
+    }
+
+    private async Task OnFilterChangedAsync() => await LoadFilesAsync();
+
+    private async Task SavePrefsAsync() => await Prefs.SaveAsync();
+
+    // ================================================================== selection & preview
+
+    private async Task SelectFileAsync(FileDto file)
+    {
+        if (_selectedFileId == file.Id) return;
+        _selectedFileId = file.Id;
+        await LoadPreviewAsync(file);
+    }
+
+    private void ClearFileSelection()
+    {
+        _selectedFileId = null;
+        _previewKey = null;
+        _previewGeneration++;
+        _preview = PreviewState.None;
+    }
+
+    private async Task LoadPreviewAsync(FileDto file)
+    {
+        var generation = ++_previewGeneration;
+        _previewKey = $"{file.Id}:{file.Version}";
+
+        var kind = FileTypeHelper.GetPreviewKind(file.Name);
+        if (kind == PreviewKind.None) { _preview = PreviewState.Unsupported; return; }
+
+        _preview = PreviewState.Loading;
+        StateHasChanged();
+        try
+        {
+            var bytes = await Api.GetContentAsync(file.Id);
+            if (generation != _previewGeneration) return;
+
+            if (kind == PreviewKind.Text)
+            {
+                const int limit = 256 * 1024;
+                var length = Math.Min(bytes.Length, limit);
+                var text = System.Text.Encoding.UTF8.GetString(bytes, 0, length);
+                _preview = PreviewState.FromText(bytes.Length > length ? text + "\n\n… preview truncated" : text);
+            }
+            else
+            {
+                _preview = PreviewState.FromImage("data:image/jpeg;base64," + Convert.ToBase64String(bytes));
+            }
+        }
+        catch (ApiException ex) when (ex.StatusCode == System.Net.HttpStatusCode.Unauthorized)
+        {
+            await Session.ExpireAsync();
+        }
+        catch (Exception ex)
+        {
+            if (generation != _previewGeneration) return;
+            _previewKey = null; // дозволяє повторити спробу
+            _preview = PreviewState.Failed(ex.Message);
+        }
+    }
+
+    private void OpenFileMenu(FileContext context)
+    {
+        _folderMenu = null;
+        _ = SelectFileAsync(context.File);
+        _fileMenu = new MenuState((int)context.X, (int)context.Y);
+    }
+
+    private void CloseMenus()
+    {
+        _folderMenu = null;
+        _fileMenu = null;
+        _menuFolder = null;
+    }
+
+    /// <summary>Закриває меню і виконує дію (дії, що відкривають діалоги, не повинні лишати меню на екрані).</summary>
+    private async Task MenuAsync(Func<Task> action)
+    {
+        CloseMenus();
+        await action();
+    }
+
+    // ================================================================== upload / download / delete
+
+    private async Task UploadClickAsync()
+    {
+        if (!CanCommand) return;
+        await Browser.ClickAsync("upload-input");
+    }
+
+    private async Task OnFilesChosenAsync(InputFileChangeEventArgs e)
+    {
+        var files = e.GetMultipleFiles(2000).ToList();
+        try { await UploadAsync(files); }
+        finally { await Browser.ResetInputAsync("upload-input"); } // дозволяє вибрати той самий файл ще раз
+    }
+
+    private async Task UploadAsync(List<IBrowserFile> files)
+    {
+        if (_selectedNode is not { } folder || files.Count == 0) return;
+        if (_busy) { _status = "Please wait for the current operation to finish."; return; }
+
+        await RunAsync("Uploading", async () =>
+        {
+            // повний список без фільтра: файл з таким самим імʼям може бути прихований фільтром
+            var existing = (await Api.GetFilesAsync(folder.Id)).ToDictionary(f => f.Name, StringComparer.Ordinal);
+            int uploaded = 0, replaced = 0, skipped = 0;
+            var failures = new List<string>();
+
+            for (var i = 0; i < files.Count; i++)
+            {
+                var file = files[i];
+                _status = $"Uploading {i + 1} of {files.Count}: {file.Name}";
+                StateHasChanged();
+
+                try
+                {
+                    if (existing.TryGetValue(file.Name, out var current))
+                    {
+                        var choice = await Dialogs.ChoiceAsync("File already exists",
+                            $"“{file.Name}” already exists in this folder. Replace it with the file you are uploading?",
+                            new ChoiceOption("Stop uploading", "cancel"),
+                            new ChoiceOption("Skip", "skip"),
+                            new ChoiceOption("Replace", "replace", Primary: true));
+                        if (choice == "cancel") break;
+                        if (choice == "skip") { skipped++; continue; }
+
+                        await using var replacement = file.OpenReadStream(MaxUploadBytes);
+                        await Api.ReplaceAsync(current.Id, file.Name, replacement, current.Version);
+                        replaced++;
+                    }
+                    else
+                    {
+                        await using var stream = file.OpenReadStream(MaxUploadBytes);
+                        await Api.UploadAsync(file.Name, stream, folder.Id);
+                        uploaded++;
+                    }
+                }
+                catch (Exception ex) when (ex is ApiException { StatusCode: not System.Net.HttpStatusCode.Unauthorized } or IOException or HttpRequestException)
+                {
+                    failures.Add($"{file.Name}: {ex.Message}");
+                }
+            }
+
+            await LoadFilesAsync();
+
+            var parts = new List<string>();
+            if (uploaded > 0) parts.Add($"{uploaded} uploaded");
+            if (replaced > 0) parts.Add($"{replaced} replaced");
+            if (skipped > 0) parts.Add($"{skipped} skipped");
+            if (failures.Count > 0) parts.Add($"{failures.Count} failed");
+            _status = parts.Count == 0 ? "Upload cancelled" : "Upload finished: " + string.Join(", ", parts);
+
+            if (failures.Count > 0)
+                await Dialogs.AlertAsync("Some files could not be uploaded", string.Join("\n", failures.Take(10)));
+        });
+    }
+
+    private async Task DownloadSelectedAsync()
+    {
+        if (SelectedFile is { } file) await DownloadFileAsync(file);
+    }
+
+    private async Task DownloadFileAsync(FileDto file)
+    {
+        await RunAsync("Downloading", async () =>
+        {
+            using var buffer = new MemoryStream();
+            await Api.DownloadAsync(file.Id, buffer);
+            buffer.Position = 0;
+            await Browser.SaveFileAsync(file.Name, buffer);
+            _status = $"Saved “{file.Name}” ({FormatHelper.Size(file.Size)})";
+        });
+    }
+
+    private async Task DeleteSelectedAsync()
+    {
+        if (_busy || SelectedFile is not { } file) return;
+        var confirmed = await Dialogs.ConfirmAsync("Delete file",
+            $"Delete “{file.Name}” from your drive?\n\nThis cannot be undone.", "Delete", danger: true);
+        if (!confirmed) return;
+
+        await RunAsync("Deleting", async () =>
+        {
+            await Api.DeleteAsync(file.Id);
+            ClearFileSelection();
+            await LoadFilesAsync();
+            _status = $"Deleted “{file.Name}”";
+        });
+    }
+
+    // ================================================================== synchronization
+
+    private async Task SyncAsync()
+    {
+        if (_busy || _selectedNode is not { } node) return;
+
+        if (!await Browser.IsFolderPickerSupportedAsync())
+        {
+            await Dialogs.AlertAsync("Not supported by this browser",
+                "Folder synchronization needs the File System Access API. Open CloudDrive in a recent Chrome, Edge or Opera on a computer (HTTPS or localhost).");
+            return;
+        }
+
+        PickedFolder? picked;
+        try { picked = await Browser.PickFolderAsync(); }
+        catch (Exception ex) { await HandleErrorAsync(ex, "Choosing folder"); return; }
+        if (picked is null) return;
+
+        try
+        {
+            var confirmed = await Dialogs.ConfirmAsync("Synchronize folders",
+                $"Synchronize the local folder “{picked.Name}” with “{node.FullPath}”?\n\n" +
+                "New and changed files are copied in both directions. Deletions are only applied after you confirm them, " +
+                "and files changed on both sides are never overwritten.",
+                "Synchronize");
+            if (!confirmed) return;
+
+            await RunAsync("Synchronizing", async () =>
+            {
+                var result = await Sync.RunAsync(picked, node.Id, async plan =>
+                {
+                    var items = plan.ToDeleteLocal.Select(p => new DeletionChoice(p, "Delete locally"))
+                        .Concat(plan.ToDeleteRemote.Select(p => new DeletionChoice(p, "Delete on CloudDrive"))).ToList();
+                    if (items.Count == 0) return Array.Empty<string>();
+                    return await Dialogs.ChooseDeletionsAsync(items);
+                });
+
+                await LoadFoldersAsync();
+                await LoadFilesAsync();
+                _status = $"Sync finished: {result.Completed.Count} done, {result.Plan.Conflicts.Count} conflicts, {result.Failures.Count} failed";
+                await Dialogs.ShowSyncResultAsync(result, picked.Name, node.FullPath);
+            });
+        }
+        finally
+        {
+            await Browser.ReleaseFolderAsync(picked.Id);
+        }
+    }
+
+    // ================================================================== keyboard
+
+    private async Task OnKeyDown(KeyboardEventArgs e)
+    {
+        if (_searchFocused) return;
+
+        if (e.Key == "Delete" && SelectedFile is not null) await DeleteSelectedAsync();
+        else if (e.Key == "Escape")
+        {
+            if (_fileMenu is not null || _folderMenu is not null || _columnsOpen) { CloseMenus(); _columnsOpen = false; }
+            else if (_selectedFileId is not null) ClearFileSelection();
+        }
+    }
+
+    private void OnSearchKeyDown(KeyboardEventArgs e)
+    {
+        if (e.Key == "Escape") SearchText = "";
+    }
+}

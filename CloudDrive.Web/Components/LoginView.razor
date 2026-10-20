@@ -1,0 +1,88 @@
+@inject SessionService Session
+@inject HttpClient Http
+
+<div class="login">
+    <section class="login-brand">
+        <Icon Name="cloud" Size="320" Class="login-watermark" />
+        <div class="login-brand-inner">
+            <span class="login-logo"><Icon Name="cloud" Size="26" /></span>
+            <h1>CloudDrive</h1>
+            <p>Your files on your own server – browse, preview and keep folders in sync.</p>
+        </div>
+    </section>
+
+    <section class="login-form">
+        <form @onsubmit="SignInAsync" @onsubmit:preventDefault>
+            <h2>Welcome back</h2>
+            <p class="muted login-sub">Sign in, or create an account on the server.</p>
+
+            @if (Session.Notice is not null)
+            {
+                <div class="banner banner-info"><Icon Name="info" Size="18" /><span>@Session.Notice</span></div>
+            }
+
+            <label class="field">
+                <span>Username</span>
+                <input class="input" @bind="_userName" @bind:event="oninput" autocomplete="username" disabled="@_busy" />
+            </label>
+            <label class="field">
+                <span>Password</span>
+                <input class="input" type="password" @bind="_password" @bind:event="oninput" autocomplete="current-password" disabled="@_busy" />
+            </label>
+
+            <div class="login-buttons">
+                <button type="submit" class="btn btn-primary btn-lg" disabled="@_busy">Sign in</button>
+                <button type="button" class="btn btn-lg" disabled="@_busy" @onclick="RegisterAsync">Create account</button>
+            </div>
+
+            <div class="progress @(_busy ? null : "invisible")"><div class="progress-bar"></div></div>
+
+            @if (_error is not null)
+            {
+                <div class="banner banner-error"><Icon Name="alert" Size="18" /><span>@_error</span></div>
+            }
+
+            <p class="muted login-server">Server: @Http.BaseAddress?.Host</p>
+        </form>
+    </section>
+</div>
+
+@code {
+    private string _userName = "";
+    private string _password = "";
+    private string? _error;
+    private bool _busy;
+
+    private Task SignInAsync() => AuthenticateAsync(register: false);
+    private Task RegisterAsync() => AuthenticateAsync(register: true);
+
+    private async Task AuthenticateAsync(bool register)
+    {
+        _error = null;
+        var userName = _userName.Trim();
+
+        if (userName.Length == 0 || _password.Length == 0) { _error = "Username and password are required."; return; }
+        if (register && userName.Length is < 3 or > 32) { _error = "Username must be 3–32 characters long."; return; }
+        if (register && _password.Length < 6) { _error = "Password must be at least 6 characters long."; return; }
+
+        _busy = true;
+        try
+        {
+            if (register) await Session.RegisterAsync(userName, _password);
+            else await Session.LoginAsync(userName, _password);
+            _password = "";
+        }
+        catch (Exception ex)
+        {
+            _error = ex switch
+            {
+                ApiException { StatusCode: System.Net.HttpStatusCode.Unauthorized } => "Incorrect username or password.",
+                ApiException { StatusCode: System.Net.HttpStatusCode.Conflict } when register => "That username is already taken.",
+                HttpRequestException => "Could not reach the server. Check your connection and try again.",
+                TaskCanceledException => "The server did not respond. Try again later.",
+                _ => ex.Message
+            };
+        }
+        finally { _busy = false; }
+    }
+}

@@ -1,0 +1,15 @@
+<Router AppAssembly="@typeof(App).Assembly">
+    <Found Context="routeData">
+        <RouteView RouteData="@routeData" DefaultLayout="@typeof(MainLayout)" />
+    </Found>
+    <NotFound>
+        <PageTitle>Not found</PageTitle>
+        <LayoutView Layout="@typeof(MainLayout)">
+            <div class="not-found">
+                <h1>Page not found</h1>
+                <p class="muted">The address you opened does not exist.</p>
+                <a class="btn btn-primary" href="">Back to CloudDrive</a>
+            </div>
+        </LayoutView>
+    </NotFound>
+</Router>

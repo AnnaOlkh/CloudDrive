@@ -1,0 +1,63 @@
+<div class="table-wrap">
+    <table class="files">
+        <thead>
+            <tr>
+                @Header(FileColumn.Name, "Name", "col-name")
+                @if (Columns.Size) { @Header(FileColumn.Size, "Size", "col-size") }
+                @if (Columns.Created) { @Header(FileColumn.Created, "Created", "col-date") }
+                @if (Columns.Modified) { @Header(FileColumn.Modified, "Modified", "col-date") }
+                @if (Columns.UploadedBy) { @Header(FileColumn.UploadedBy, "Uploaded by", "col-user") }
+                @if (Columns.EditedBy) { @Header(FileColumn.EditedBy, "Edited by", "col-user") }
+            </tr>
+        </thead>
+        <tbody>
+            @foreach (var f in Files)
+            {
+                var file = f;
+                var kind = FormatHelper.FileKind(file.Name);
+                <tr @key="file.Id" tabindex="0" class="@(file.Id == SelectedId ? "selected" : null)"
+                    @onclick="() => OnSelect.InvokeAsync(file)"
+                    @ondblclick="() => OnOpen.InvokeAsync(file)"
+                    @oncontextmenu="e => OnContext.InvokeAsync(new FileContext(file, e.ClientX, e.ClientY))"
+                    @oncontextmenu:preventDefault>
+                    <td class="col-name">
+                        <span class="file-cell">
+                            <Icon Name="@kind.Icon" Size="20" Class="@kind.Css" />
+                            <span class="ellipsis" title="@file.Name">@file.Name</span>
+                        </span>
+                    </td>
+                    @if (Columns.Size) { <td class="muted">@FormatHelper.Size(file.Size)</td> }
+                    @if (Columns.Created) { <td class="muted">@FormatHelper.Time(file.CreatedAt)</td> }
+                    @if (Columns.Modified) { <td class="muted">@FormatHelper.Time(file.ModifiedAt)</td> }
+                    @if (Columns.UploadedBy) { <td class="muted">@file.UploadedBy</td> }
+                    @if (Columns.EditedBy) { <td class="muted">@file.LastEditedBy</td> }
+                </tr>
+            }
+        </tbody>
+    </table>
+</div>
+
+@code {
+    [Parameter, EditorRequired] public IReadOnlyList<FileDto> Files { get; set; } = Array.Empty<FileDto>();
+    [Parameter] public Guid? SelectedId { get; set; }
+    [Parameter, EditorRequired] public ColumnPrefs Columns { get; set; } = new();
+    [Parameter] public FileColumn SortColumn { get; set; } = FileColumn.Name;
+    [Parameter] public bool SortDescending { get; set; }
+    [Parameter] public EventCallback<FileColumn> OnSort { get; set; }
+    [Parameter] public EventCallback<FileDto> OnSelect { get; set; }
+    [Parameter] public EventCallback<FileDto> OnOpen { get; set; }
+    [Parameter] public EventCallback<FileContext> OnContext { get; set; }
+
+    private RenderFragment Header(FileColumn column, string title, string css)
+    {
+        return @<th class="@css sortable" @onclick="() => OnSort.InvokeAsync(column)">
+            <span class="th-inner">
+                <span>@title</span>
+                @if (SortColumn == column)
+                {
+                    <Icon Name="@(SortDescending ? "chevron-down" : "chevron-up")" Size="14" />
+                }
+            </span>
+        </th>;
+    }
+}

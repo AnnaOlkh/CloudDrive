@@ -1,0 +1,32 @@
+<li class="tree-item">
+    <div class="tree-row @(Node.Id == SelectedId ? "selected" : null)"
+         @onclick="() => OnSelect.InvokeAsync(Node)"
+         @oncontextmenu="e => OnContext.InvokeAsync(new NodeContext(Node, e.ClientX, e.ClientY))"
+         @oncontextmenu:preventDefault>
+        <button type="button" class="tree-chevron @(Node.Children.Count == 0 ? "invisible" : null)"
+                tabindex="-1" aria-label="Expand or collapse" @onclick="Toggle" @onclick:stopPropagation>
+            <Icon Name="@(Node.IsExpanded ? "chevron-down" : "chevron-right")" Size="14" />
+        </button>
+        <Icon Name="@(Node.IsRoot ? "home" : "folder")" Class="tree-icon" />
+        <span class="tree-name">@Node.Name</span>
+    </div>
+
+    @if (Node.IsExpanded && Node.Children.Count > 0)
+    {
+        <ul class="tree-children">
+            @foreach (var child in Node.Children)
+            {
+                <FolderTreeNode @key="child.Id" Node="child" SelectedId="SelectedId" OnSelect="OnSelect" OnContext="OnContext" />
+            }
+        </ul>
+    }
+</li>
+
+@code {
+    [Parameter, EditorRequired] public FolderNode Node { get; set; } = default!;
+    [Parameter] public Guid? SelectedId { get; set; }
+    [Parameter] public EventCallback<FolderNode> OnSelect { get; set; }
+    [Parameter] public EventCallback<NodeContext> OnContext { get; set; }
+
+    private void Toggle() => Node.IsExpanded = !Node.IsExpanded;
+}

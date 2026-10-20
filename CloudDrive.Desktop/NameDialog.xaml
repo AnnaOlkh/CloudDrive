@@ -1,0 +1,19 @@
+<Window x:Class="CloudDrive.Desktop.NameDialog"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:ui="http://schemas.modernwpf.com/2019"
+        ui:WindowHelper.UseModernWindowStyle="True"
+        Title="New folder" Width="430" SizeToContent="Height" ResizeMode="NoResize"
+        WindowStartupLocation="CenterOwner" ShowInTaskbar="False">
+  <StackPanel Margin="24,20,24,22">
+    <TextBlock Text="New folder" FontSize="20" FontWeight="SemiBold"/>
+    <TextBlock x:Name="LocationText" Style="{StaticResource Secondary}" TextWrapping="Wrap" Margin="0,4,0,16"/>
+    <TextBox x:Name="NameBox" ui:ControlHelper.PlaceholderText="Folder name" TextChanged="NameBox_TextChanged"/>
+    <TextBlock x:Name="ErrorText" Foreground="{StaticResource Danger}" TextWrapping="Wrap" Margin="0,8,0,0" Visibility="Collapsed"/>
+    <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,20,0,0">
+      <Button Content="Cancel" IsCancel="True" MinWidth="90" Margin="0,0,10,0"/>
+      <Button x:Name="CreateButton" Content="Create" IsDefault="True" Click="Create_Click" MinWidth="90"
+              Style="{StaticResource AccentButtonStyle}"/>
+    </StackPanel>
+  </StackPanel>
+</Window>

@@ -1,0 +1,45 @@
+@{
+    var kind = FormatHelper.FileKind(File.Name);
+}
+<div class="details">
+    <div class="details-head">
+        <Icon Name="@kind.Icon" Size="30" Class="@kind.Css" />
+        <div class="details-title" title="@File.Name">@File.Name</div>
+        <button type="button" class="icon-btn" title="Close (Esc)" @onclick="OnClose"><Icon Name="x" Size="18" /></button>
+    </div>
+
+    <dl class="details-list">
+        <dt>Size</dt><dd>@FormatHelper.Size(File.Size)</dd>
+        <dt>Created</dt><dd>@FormatHelper.Time(File.CreatedAt)</dd>
+        <dt>Modified</dt><dd>@FormatHelper.Time(File.ModifiedAt)</dd>
+        <dt>Uploaded by</dt><dd>@File.UploadedBy</dd>
+        <dt>Edited by</dt><dd>@File.LastEditedBy</dd>
+    </dl>
+
+    <div class="preview">
+        @switch (Preview.Status)
+        {
+            case PreviewStatus.Loading:
+                <div class="preview-message"><div class="spinner"></div><span>Loading preview…</span></div>
+                break;
+            case PreviewStatus.Text:
+                <pre class="preview-text">@Preview.Text</pre>
+                break;
+            case PreviewStatus.Image:
+                <img class="preview-image" src="@Preview.ImageUrl" alt="@File.Name" />
+                break;
+            case PreviewStatus.Failed:
+                <div class="preview-message error">Preview unavailable: @Preview.Message</div>
+                break;
+            default:
+                <div class="preview-message">No preview for this file type.<br />Preview is available for .c and .jpg files.</div>
+                break;
+        }
+    </div>
+</div>
+
+@code {
+    [Parameter, EditorRequired] public FileDto File { get; set; } = default!;
+    [Parameter, EditorRequired] public PreviewState Preview { get; set; } = PreviewState.None;
+    [Parameter] public EventCallback OnClose { get; set; }
+}

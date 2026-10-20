@@ -1,0 +1,219 @@
+@implements IDisposable
+@inject DialogService Dialogs
+
+@if (Dialogs.Current is { } current)
+{
+    <div class="modal-backdrop" @onclick="() => Cancel(current)">
+        <div @ref="_modal" tabindex="-1" class="modal @((current is SyncResultRequest || current is DeletionsRequest) ? "modal-wide" : null)"
+             role="dialog" aria-modal="true"
+             @onclick:stopPropagation
+             @onkeydown="e => OnKeyDown(e, current)">
+
+            @switch (current)
+            {
+                case ConfirmRequest confirm:
+                    <h2>@confirm.Title</h2>
+                    <p class="modal-text">@confirm.Message</p>
+                    <div class="modal-actions">
+                        @if (confirm.CancelText is not null)
+                        {
+                            <button type="button" class="btn" @onclick="() => confirm.Result.TrySetResult(false)">@confirm.CancelText</button>
+                        }
+                        <button type="button" class="btn @(confirm.Danger ? "btn-danger" : "btn-primary")"
+                                @onclick="() => confirm.Result.TrySetResult(true)">@confirm.ConfirmText</button>
+                    </div>
+                    break;
+
+                case ChoiceRequest choice:
+                    <h2>@choice.Title</h2>
+                    <p class="modal-text">@choice.Message</p>
+                    <div class="modal-actions">
+                        @foreach (var option in choice.Options)
+                        {
+                            var value = option.Value;
+                            <button type="button" class="btn @(option.Primary ? "btn-primary" : null)"
+                                    @onclick="() => choice.Result.TrySetResult(value)">@option.Label</button>
+                        }
+                    </div>
+                    break;
+
+                case PromptRequest prompt:
+                    <h2>@prompt.Title</h2>
+                    @if (prompt.Subtitle is not null)
+                    {
+                        <p class="muted modal-sub">@prompt.Subtitle</p>
+                    }
+                    <input @ref="_promptInput" class="input" placeholder="@prompt.Placeholder" maxlength="255"
+                           @bind="_promptValue" @bind:event="oninput" />
+                    @if (_promptError is not null)
+                    {
+                        <p class="field-error">@_promptError</p>
+                    }
+                    <div class="modal-actions">
+                        <button type="button" class="btn" @onclick="() => prompt.Result.TrySetResult(null)">Cancel</button>
+                        <button type="button" class="btn btn-primary" @onclick="() => SubmitPrompt(prompt)">Create</button>
+                    </div>
+                    break;
+
+                case DeletionsRequest deletions:
+                    <h2><Icon Name="trash" Class="text-danger" /> Files deleted since the last sync</h2>
+                    <p class="modal-text muted">Tick the deletions to apply on the other side. Anything left unticked is kept and asked about again next time.</p>
+                    <ul class="check-list">
+                        @foreach (var item in deletions.Items)
+                        {
+                            <li>
+                                <label>
+                                    <input type="checkbox" @bind="item.Selected" />
+                                    <span>
+                                        <span class="check-path">@item.Path</span>
+                                        <span class="muted check-action">@item.Action</span>
+                                    </span>
+                                </label>
+                            </li>
+                        }
+                    </ul>
+                    <div class="modal-actions modal-actions-split">
+                        <span>
+                            <button type="button" class="btn" @onclick="() => SetAll(deletions, true)">Select all</button>
+                            <button type="button" class="btn" @onclick="() => SetAll(deletions, false)">Select none</button>
+                        </span>
+                        <span>
+                            <button type="button" class="btn" @onclick="() => deletions.Result.TrySetResult(Array.Empty<string>())">Keep all</button>
+                            <button type="button" class="btn btn-primary"
+                                    @onclick="() => deletions.Result.TrySetResult(deletions.Items.Where(i => i.Selected).Select(i => i.Path).ToArray())">Apply selected</button>
+                        </span>
+                    </div>
+                    break;
+
+                case SyncResultRequest sync:
+                    @SyncResultView(sync)
+                    break;
+            }
+        </div>
+    </div>
+}
+
+@code {
+    private ElementReference _modal;
+    private ElementReference _promptInput;
+    private DialogRequest? _lastFocused;
+    private DialogRequest? _lastPrompt;
+    private string _promptValue = "";
+    private string? _promptError;
+
+    protected override void OnInitialized() => Dialogs.Changed += OnChanged;
+
+    private void OnChanged()
+    {
+        if (Dialogs.Current is PromptRequest prompt && !ReferenceEquals(prompt, _lastPrompt))
+        {
+            _lastPrompt = prompt;
+            _promptValue = "";
+            _promptError = null;
+        }
+        _ = InvokeAsync(StateHasChanged);
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        var current = Dialogs.Current;
+        if (current is null || ReferenceEquals(current, _lastFocused)) return;
+        _lastFocused = current;
+        try
+        {
+            if (current is PromptRequest) await _promptInput.FocusAsync();
+            else await _modal.FocusAsync();
+        }
+        catch (Exception) { /* фокус не критичний */ }
+    }
+
+    private void OnKeyDown(KeyboardEventArgs e, DialogRequest request)
+    {
+        if (e.Key == "Escape") Cancel(request);
+        else if (e.Key == "Enter" && request is PromptRequest prompt) SubmitPrompt(prompt);
+    }
+
+    private void SubmitPrompt(PromptRequest prompt)
+    {
+        var name = _promptValue.Trim();
+        if (!FileNameValidator.IsValid(name))
+        {
+            _promptError = "This name is not allowed. Avoid < > : \" / \\ | ? * and Windows reserved names such as CON or NUL.";
+            return;
+        }
+        prompt.Result.TrySetResult(name);
+    }
+
+    private static void SetAll(DeletionsRequest request, bool selected)
+    {
+        foreach (var item in request.Items) item.Selected = selected;
+    }
+
+    private static void Cancel(DialogRequest request)
+    {
+        switch (request)
+        {
+            case ConfirmRequest c: c.Result.TrySetResult(false); break;
+            case ChoiceRequest c: c.Result.TrySetResult("cancel"); break;
+            case PromptRequest p: p.Result.TrySetResult(null); break;
+            case DeletionsRequest d: d.Result.TrySetResult(Array.Empty<string>()); break;
+            case SyncResultRequest s: s.Closed.TrySetResult(true); break;
+        }
+    }
+
+    private RenderFragment SyncResultView(SyncResultRequest sync)
+    {
+        var result = sync.Result;
+        var transferred = result.Completed.Count(x => x.ConfirmedHash is not null);
+        var deleted = result.Completed.Count(x => x.ConfirmedHash is null);
+        var pending = Math.Max(0, result.Plan.ToDeleteLocal.Count + result.Plan.ToDeleteRemote.Count - deleted);
+        var conflicts = result.Plan.Conflicts;
+        var failed = result.Failures;
+        var problems = conflicts.Count > 0 || failed.Count > 0;
+        var title = failed.Count > 0 ? "Synchronization finished with errors"
+            : conflicts.Count > 0 ? "Synchronization finished with conflicts"
+            : transferred + deleted == 0 ? "Everything is already in sync"
+            : "Synchronization complete";
+
+        return @<div>
+            <div class="result-head">
+                <Icon Name="@(problems ? "alert" : "check-circle")" Size="28" Class="@(problems ? "text-warning" : "text-success")" />
+                <div>
+                    <h2>@title</h2>
+                    <div class="muted ellipsis">@sync.LocalName &nbsp;↔&nbsp; @sync.RemotePath</div>
+                </div>
+            </div>
+
+            <div class="stat-grid">
+                <div class="stat"><strong>@transferred</strong><span>Transferred</span></div>
+                <div class="stat"><strong>@deleted</strong><span>Deleted</span></div>
+                <div class="stat"><strong>@pending</strong><span>Kept for later</span></div>
+                <div class="stat"><strong>@conflicts.Count</strong><span>Conflicts</span></div>
+                <div class="stat"><strong>@failed.Count</strong><span>Failed</span></div>
+            </div>
+
+            <div class="result-lists">
+                @if (conflicts.Count > 0)
+                {
+                    <h3 class="text-warning">Conflicts – changed on both sides, neither version was overwritten</h3>
+                    <ul class="plain-list">
+                        @foreach (var path in conflicts) { <li>@path</li> }
+                    </ul>
+                }
+                @if (failed.Count > 0)
+                {
+                    <h3 class="text-danger">Failed</h3>
+                    <ul class="plain-list">
+                        @foreach (var item in failed) { <li>@item.Key – @item.Value</li> }
+                    </ul>
+                }
+            </div>
+
+            <div class="modal-actions">
+                <button type="button" class="btn btn-primary" @onclick="() => sync.Closed.TrySetResult(true)">Close</button>
+            </div>
+        </div>;
+    }
+
+    public void Dispose() => Dialogs.Changed -= OnChanged;
+}

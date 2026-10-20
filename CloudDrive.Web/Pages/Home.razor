@@ -1,0 +1,25 @@
+@page "/"
+@implements IDisposable
+@inject SessionService Session
+
+<PageTitle>CloudDrive</PageTitle>
+
+@if (Session.IsAuthenticated)
+{
+    <DriveView FolderId="FolderId" />
+}
+else
+{
+    <LoginView />
+}
+
+@code {
+    [Parameter, SupplyParameterFromQuery(Name = "folder")]
+    public Guid? FolderId { get; set; }
+
+    protected override void OnInitialized() => Session.Changed += OnSessionChanged;
+
+    private void OnSessionChanged() => _ = InvokeAsync(StateHasChanged);
+
+    public void Dispose() => Session.Changed -= OnSessionChanged;
+}
