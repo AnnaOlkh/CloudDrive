@@ -124,7 +124,7 @@
             if (current is PromptRequest) await _promptInput.FocusAsync();
             else await _modal.FocusAsync();
         }
-        catch (Exception) { /* фокус не критичний */ }
+        catch (Exception) { }
     }
 
     private void OnKeyDown(KeyboardEventArgs e, DialogRequest request)

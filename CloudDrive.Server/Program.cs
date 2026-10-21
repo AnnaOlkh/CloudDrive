@@ -9,25 +9,30 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 using Microsoft.IdentityModel.Tokens;
 using Microsoft.OpenApi.Models;
+using Microsoft.AspNetCore.Builder;
 
-const long MaxUploadBytes = 100L * 1024 * 1024; // 100 МБ
+const long MaxUploadBytes = 100L * 1024 * 1024;
 
 var builder = WebApplication.CreateBuilder(args);
 
-var dataRoot = builder.Configuration["Data:Root"];
 
-if (string.IsNullOrWhiteSpace(dataRoot))
-{
-    dataRoot = Path.GetFullPath(
-        Path.Combine(
+var configuredDataRoot = builder.Configuration["Data:Root"];
+
+var dataRoot = string.IsNullOrWhiteSpace(configuredDataRoot)
+    ? Path.Combine(
+        builder.Environment.ContentRootPath,
+        "..",
+        "CloudDriveData")
+    : Path.IsPathRooted(configuredDataRoot)
+        ? configuredDataRoot
+        : Path.Combine(
             builder.Environment.ContentRootPath,
-            "..",
-            "CloudDriveData"
-        )
-    );
-}
+            configuredDataRoot);
+
+dataRoot = Path.GetFullPath(dataRoot);
 
 Directory.CreateDirectory(dataRoot);
+
 
 var dbPath = Path.Combine(dataRoot, "clouddrive.db");
 
@@ -55,8 +60,6 @@ builder.Services.AddOptions<JwtBearerOptions>(JwtBearerDefaults.AuthenticationSc
 builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme).AddJwtBearer();
 builder.Services.AddAuthorization();
 
-// CORS для Blazor WASM (етап 3). Cors:Origins порожній -> дозволено будь-який origin
-// (безпечно, бо автентифікація через заголовок Authorization, а не cookies).
 builder.Services.AddCors(o => o.AddDefaultPolicy(p =>
 {
     var origins = builder.Configuration.GetSection("Cors:Origins").Get<string[]>() ?? Array.Empty<string>();
@@ -84,12 +87,15 @@ builder.Services.AddSwaggerGen(o =>
 
 var app = builder.Build();
 
-// Для лабораторної достатньо EnsureCreated; у продакшні замінити на міграції.
 using (var scope = app.Services.CreateScope())
     scope.ServiceProvider.GetRequiredService<AppDbContext>().Database.EnsureCreated();
 
 app.UseSwagger();
 app.UseSwaggerUI();
+
+app.UseBlazorFrameworkFiles();
+app.UseStaticFiles();
+
 app.UseCors();
 app.UseAuthentication();
 app.UseAuthorization();
@@ -98,7 +104,11 @@ app.MapAuth();
 app.MapFolders();
 app.MapFiles();
 
+app.Map("/api/{**path}", () => Results.NotFound());
+
+app.MapFallbackToFile("index.html");
+
 app.Run();
 
-// Потрібно для WebApplicationFactory<Program> в інтеграційних тестах.
+
 public partial class Program { }

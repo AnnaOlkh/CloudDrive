@@ -4,7 +4,6 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <RootNamespace>CloudDrive.Web</RootNamespace>
-    <!-- Без тримінгу: JSON-серіалізація record-типів (Core/Client) надійно працює в Release. -->
     <PublishTrimmed>false</PublishTrimmed>
   </PropertyGroup>
   <ItemGroup>
